@@ -288,8 +288,7 @@ def neq_from_ani_to_mm(molecule,
                        nr_of_switches:int, 
                        save_samples:str = "", 
                        load_samples:str="", 
-                       platform:str='cuda',
-                       debug:bool = False):
+                       platform:str='cuda'):
     """NEQ switching from ANI to MM
 
     Args:
@@ -321,33 +320,20 @@ def neq_from_ani_to_mm(molecule,
     
    
     # define function that collects samples 
-    if load_samples:
-        generate_samples=pickle.load(open(load_samples, 'rb'))
-    else:
-        generate_samples = partial(collect_samples_ani, n_samples=n_samples, n_steps_per_sample = n_steps_per_sample)
-    
-    if save_samples:
-        pickle.dump(generate_samples, open(save_samples, 'wb+'))
-    
+    generate_samples = partial(collect_samples_ani, n_samples=n_samples, n_steps_per_sample = n_steps_per_sample)
+       
     # call switching routine
-    w_list, traj = _noneq_sampling_and_switching(nr_of_switches=nr_of_switches, 
+    ws = _noneq_sampling_and_switching(nr_of_switches=nr_of_switches, 
                                   molecule=molecule, 
                                   generate_samples=generate_samples,
                                   calculate_force=_calculate_forces,
                                   calculate_energy = _calculate_energy,
                                   switching_length=switching_length,
-                                  debug=debug
+                                  save_samples=save_samples,
+                                  load_samples=load_samples
                                   )
    
-    # calculates offset from work entries
-    offset = np.average(w_list)
-    w_unitless_offset = [(w - offset) for w in w_list]
-    # exponential average
-    avgsumexp_unitless_offset = np.average(np.exp(w_unitless_offset))
-    # sum over exponential average and add offset to sum
-    logavgsumexp = np.log(avgsumexp_unitless_offset) + offset
-    stddev_w = np.std(w_unitless_offset)
-    return logavgsumexp, stddev_w, w_list
+    return ws
 
 
 def neq_from_mm_to_ani(molecule, 
@@ -357,8 +343,7 @@ def neq_from_mm_to_ani(molecule,
                        switching_length:int, 
                        save_samples:str = "", 
                        load_samples:str="",
-                       platform:str='cuda',
-                       debug:bool = False):
+                       platform:str='cuda'):
     """NEQ switching from ANI to MM
 
     Args:
@@ -390,36 +375,20 @@ def neq_from_mm_to_ani(molecule,
     
    
     # define function that collects samples 
-    if load_samples:
-        generate_samples=pickle.load(open(load_samples, 'rb'))
-    else:
-        generate_samples = partial(collect_samples_mm, sim=sim, n_samples=n_samples, n_steps_per_sample = n_steps_per_sample)
-    
-    if save_samples:
-        pickle.dump(generate_samples, open(save_samples, 'wb+'))
-
-    
+    generate_samples = partial(collect_samples_mm, sim=sim, n_samples=n_samples, n_steps_per_sample = n_steps_per_sample)
+       
     # call switching routine
-    w_list,traj = _noneq_sampling_and_switching(nr_of_switches=nr_of_switches, 
+    ws = _noneq_sampling_and_switching(nr_of_switches=nr_of_switches, 
                                   molecule=molecule, 
                                   generate_samples=generate_samples,
                                   calculate_force=_calculate_forces,
                                   calculate_energy = _calculate_energy,
                                   switching_length=switching_length,
-                                  debug=debug
+                                  save_samples=save_samples,
+                                  load_samples = load_samples
                                   )
 
-    # calculates offset from work entries
-    ws = np.array(w_list)
-    offset = np.average(ws)
-    w_unitless_offset =  ws - offset
-    # exponential average
-    avgsumexp_unitless_offset = np.average(np.exp(w_unitless_offset))
-    # sum over exponential average and add offset to sum
-    logavgsumexp = np.log(avgsumexp_unitless_offset) + offset
-    stddev_w = np.std(w_unitless_offset)
-    return logavgsumexp, stddev_w, w_list
-
+    return ws
 
 def _noneq_sampling_and_switching(
     nr_of_switches:int,
@@ -428,7 +397,8 @@ def _noneq_sampling_and_switching(
     calculate_force, 
     calculate_energy,
     switching_length:int,
-    debug:bool = False
+    save_samples:str,
+    load_samples:str,
     ):
     """
     Use nonequ switching to calculate work values from 'from_system' to 'to_system' starting with 'from_system' sampels.
@@ -449,15 +419,22 @@ def _noneq_sampling_and_switching(
 
     # generate samples
     print('Start generating samples ...')
-    samples = generate_samples(molecule)
+    if load_samples:
+        print('Loading prgenerated samples  ...')
+        samples = pickle.load(open(load_samples, 'rb'))
+    else:
+        samples = generate_samples(molecule)
+        if save_samples:
+            pickle.dump(samples, open(save_samples, 'wb+'))
+
     print('Samples generated ...')
 
-    # traj accumulates the samples
-    traj = []
     # w_list contains the work values for each switchin protocol
     w_list = []    
     print("Start with switching protocoll ...")
     for switch_nr in tqdm(range(nr_of_switches)):
+        # traj accumulates the samples
+        traj = []
         # select starting conformations
         x = np.array(random.choice(samples).value_in_unit(distance_unit)) * distance_unit
         # initial force
@@ -487,14 +464,14 @@ def _noneq_sampling_and_switching(
             u_before = calculate_energy(x, lamb=lam_values[idx-1])
             w += (u_now - u_before)
         
-        if debug:
+        w_list.append(w.value_in_unit(unit.kilojoule_per_mole))
+
+        if save_samples:
             print(f'NEQ switching work: {w}')
             print('##################')
-        w_list.append(w.value_in_unit(unit.kilojoule_per_mole))
-        if debug:
-            save_traj(traj, molecule, name=f'switching_{switch_nr}.dcd')
+            save_traj(traj, molecule, name=f'{save_samples.split(".")[0]}_{switch_nr}.dcd')
 
-    return w_list, traj
+    return np.array(w_list) * unit.kilojoule_per_mole
 
 
         
